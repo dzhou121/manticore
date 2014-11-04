@@ -1,6 +1,6 @@
 from neutron.agent import l3_agent
 from neutron.common import constants as l3_constants
-from neutron.openstack.common.rpc import proxy
+from neutron.common import rpc as n_rpc
 from neutron.agent.linux import ip_lib
 from oslo.config import cfg
 
@@ -14,7 +14,7 @@ cfg.CONF.register_opts(opts)
 FLOATING_IP_CIDR_SUFFIX = '/32'
 
 
-class ManticoreRPCApi(proxy.RpcProxy):
+class ManticoreRPCApi(n_rpc.RpcProxy):
 
     def __init__(self):
         super(ManticoreRPCApi, self).__init__(
