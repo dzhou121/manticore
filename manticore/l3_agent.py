@@ -11,6 +11,7 @@ opts = [
 ]
 
 cfg.CONF.register_opts(opts)
+FLOATING_IP_CIDR_SUFFIX = '/32'
 
 
 class ManticoreRPCApi(proxy.RpcProxy):
@@ -39,22 +40,43 @@ class ManticoreL3Agent(l3_agent.L3NATAgentWithStateReport):
         self.manticore_rpc_api = ManticoreRPCApi()
 
     def process_router_floating_ip_addresses(self, ri, ex_gw_port):
-        interface_name = self.get_external_device_name(ex_gw_port['id'])
+        """Configure IP addresses on router's external gateway interface.
+
+        Ensures addresses for existing floating IPs and cleans up
+        those that should not longer be configured.
+        """
+
+        fip_statuses = {}
+        floating_ips = ri.router.get(l3_constants.FLOATINGIP_KEY, [])
+        interface_name = self._get_external_device_interface_name(
+            ri, ex_gw_port, floating_ips)
+        if interface_name is None:
+            return fip_statuses
+
         device = ip_lib.IPDevice(interface_name, self.root_helper,
                                  namespace=ri.ns_name)
         existing_cidrs = set([addr['cidr'] for addr in device.addr.list()])
-
-        fip_statuses = super(ManticoreL3Agent, self).\
-            process_router_floating_ip_addresses(ri, ex_gw_port)
+        new_cidrs = set()
 
         # Loop once to ensure that floating ips are configured.
-        for fip in ri.router.get(l3_constants.FLOATINGIP_KEY, []):
+        for fip in floating_ips:
             fip_ip = fip['floating_ip_address']
-            ip_cidr = str(fip_ip) + l3_agent.FLOATING_IP_CIDR_SUFFIX
+            ip_cidr = str(fip_ip) + FLOATING_IP_CIDR_SUFFIX
+            new_cidrs.add(ip_cidr)
+            fip_statuses[fip['id']] = l3_constants.FLOATINGIP_STATUS_ACTIVE
             if ip_cidr not in existing_cidrs:
+                fip_statuses[fip['id']] = self._add_floating_ip(
+                    ri, fip, interface_name, device)
+                # add BGP prefix for the floating IP
                 self.manticore_rpc_api.prefix_add({},
                                                   ip_cidr,
                                                   cfg.CONF.routing_ip)
+
+        fips_to_remove = (
+            ip_cidr for ip_cidr in existing_cidrs - new_cidrs if
+            ip_cidr.endswith(FLOATING_IP_CIDR_SUFFIX))
+        for ip_cidr in fips_to_remove:
+            self._remove_floating_ip(ri, device, ip_cidr)
 
         return fip_statuses
 
